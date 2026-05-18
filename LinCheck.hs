@@ -50,13 +50,19 @@ diffContext context v qt = do
      (QualType Unrestrict _) -> return (delete v context)
 
 
+containCheck :: LinQual -> QualType -> Bool
+containCheck lq qt =
+  case (lq, qt) of
+    (Linear, QualType Linear _) -> True
+    (Unrestrict, QualType Unrestrict _) -> True
+    (Unrestrict,  QualType Linear _ ) -> False
+
 {- All linear types are consumed when the term is type-checked in
  - the input context and unrestricted types pass through unchanged -}
 check :: Context -> Term -> Check (QualType, Context)
-
 check context (Var x) =
   case (lookup x context) of
-    Just qt@(QualType Unrestrict  _)   -> return (qt, context)
+    Just qt@(QualType Unrestrict  _) -> return (qt, context)
     Just qt@(QualType Linear _) -> return (qt, delete x context)
     Nothing -> throwError $ Err "var not in context"
 
@@ -91,6 +97,10 @@ check context (App t1 t2) = do
 check context (Pair qt t1 t2) = do
     (pairTy1, context') <- check context t1
     (pairTy2, context'')  <- check context' t2
+    unless (containCheck qt pairTy1) $
+        throwError $ Err "Containment check for first term of a Pair fails"
+    unless (containCheck qt pairTy2) $
+        throwError $ Err "Containment check for second term of a Pair fails"
     return (QualType qt (TPair pairTy1 pairTy2), context'')
 
 check context (Split splitTerm x y inTerm) = do
