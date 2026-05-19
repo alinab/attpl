@@ -8,6 +8,7 @@ type Check = Either TypeError
 
 type Sym = String
 
+{- Type qualifiers -}
 data LinQual = Linear
              | Unrestrict
           deriving (Eq, Show, Ord)
@@ -28,9 +29,12 @@ data PreType = TBool
              | TPair QualType QualType
              deriving (Show, Eq, Ord)
 
+{- Types with qualifiers; these wrap pre-types -}
 data QualType = QualType LinQual PreType
           deriving (Eq, Show, Ord)
 
+{- The context is an association lists of variables
+ - associated with a qualified type -}
 type Context = [(Sym, QualType)]
 
 {-----------------------------------------------}
@@ -41,6 +45,12 @@ extend context vt = vt : context
 delete :: Sym -> Context -> Context
 delete v context = filter ((/= v ) . fst) context
 
+{- Check that:
+ - a term with a linear type is never present in an outgoing context
+ - as that indicates that it is unused (linear -> always used once)
+ - a term with unrestricted type is deleted from the context
+ to ensure terms conform to scoping rules
+-}
 diffContext :: Context -> String -> QualType -> Check Context
 diffContext context v qt = do
     case qt of
@@ -50,7 +60,12 @@ diffContext context v qt = do
             Nothing -> return context
      (QualType Unrestrict _) -> return (delete v context)
 
-
+{- The containment check specifies that:
+ - q(T) if and only if T = q'P where P is the pre-type
+ - q ⊆ q' i.e. unrestricted data structures cannot contain linear data
+ - strucutures or less restrictive data types must be contained within
+ - more restrictive ones
+-}
 containCheck :: LinQual -> QualType -> Bool
 containCheck lq qt =
   case (lq, qt) of
@@ -58,8 +73,11 @@ containCheck lq qt =
     (Unrestrict, QualType Unrestrict _) -> True
     (Unrestrict,  QualType Linear _ ) -> False
 
-{- All linear types are consumed when the term is type-checked in
- - the input context and unrestricted types pass through unchanged -}
+{- All linear types are consumed once when a term is type-checked
+ - in the input context and unrestricted types pass through unchanged
+ - (Unrestricted yariables introduced in lambdas and split terms are
+ - deleted from the context so that they do not escape their scope.
+-}
 check :: Context -> Term -> Check (QualType, Context)
 check context (Var x) =
   case (lookup x context) of
@@ -120,7 +138,6 @@ check context (Split splitTerm x y inTerm) = do
 check context (LBool q _) = return (QualType q TBool, context)
 check context (LInt q _) = return (QualType q TInt, context)
 
-{-----------------------------------------------}
 checkExpr :: Term -> Either TypeError (QualType, Context)
 checkExpr x = check [] x
 
