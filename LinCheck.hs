@@ -1,5 +1,6 @@
 import Control.Monad.Except
-import Control.Monad
+import Control.Monad.State
+import Control.Monad (unless, when)
 
 data TypeError = Err String deriving Show
 
