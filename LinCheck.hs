@@ -141,3 +141,186 @@ check context (LInt q _) = return (QualType q TInt, context)
 checkExpr :: Term -> Either TypeError (QualType, Context)
 checkExpr x = check [] x
 
+
+{---------------------------------------------------------------}
+type Store = [(Sym, Term)]
+
+type Eval a = State (Store, Int) a
+
+genSym :: Eval Sym
+genSym = do
+  (store, n) <- get
+  put (store, n + 1)
+  return ("x" ++ show n)
+
+addStore :: Term -> Eval Sym
+addStore term = do
+                s <- genSym
+                (store, n) <- get
+                put ((s, term) : store, n)
+                return s
+
+delBindStore :: Sym -> Eval ()
+delBindStore v = do
+                 (store, n) <- get
+                 put (filter ((/= v ) . fst) store, n)
+
+lookupStore :: Sym -> Eval (Maybe Term)
+lookupStore v = do
+        (store, _) <- get
+        return (lookup v store)
+
+{- Variable substitution -}
+substTerm :: Sym -> Sym -> Term -> Term
+substTerm y x (Var z) = if z == y
+                        then Var x else Var z
+substTerm y x (App t1 t2) = App (substTerm y x t1) (substTerm y x t2)
+substTerm y x (TIf t1 t2 t3) = TIf (substTerm y x t1) (substTerm y x t2)
+                                    (substTerm y x t3)
+substTerm y x (Lam q z qt body) = if z == y then Lam q z qt body
+                                  else Lam q z qt (substTerm y x body)
+substTerm y x (Pair q t1 t2)   = Pair q (substTerm y x t1) (substTerm y x t2)
+substTerm y x (Split t a b body)  = Split (substTerm y x t) a b
+                                    (if a == y || b == y
+                                     then body
+                                     else substTerm y x body)
+substTerm _ _ t = t
+
+{- Term evaluation -}
+eval :: Term -> Eval Sym
+eval (LBool q b) = addStore (LBool q b)
+eval (LInt q n) = addStore (LInt q n)
+eval (Var x) = return x
+
+{- The terms in a pair are evaluated to variables; these variables are
+ - then stored as a Pair term -}
+eval (Pair qt t1 t2) = do
+                       y <- eval t1
+                       z <- eval t2
+                       addStore (Pair qt (Var y) (Var z))
+
+eval (Lam q x qt t) = addStore (Lam q x qt t)
+
+{- t1 is evaluated to a Lambda and then t2 applied to it -}
+eval (App t1 t2) = do
+    x1 <- eval t1
+    x2 <- eval t2
+    result <- lookupStore x1
+    case result of
+        Just (Lam qt y _ l) -> do
+          case qt of
+           Linear -> delBindStore x1
+           Unrestrict -> return ()
+          eval (substTerm y x2 l)
+        _  -> error "App term incorrect-lambda not applied"
+
+{- t1 is evaluated to a boolean pre-type before either t2 or t3 is
+ - evaluated
+-}
+eval (TIf t1 t2 t3) = do
+      x <- eval t1
+      x' <- lookupStore x
+      case x' of
+        Just (LBool qt b) -> do
+          case qt of
+           Linear -> delBindStore x
+           Unrestrict -> return ()
+          case b of
+            True -> eval t2
+            False -> eval t3
+        _  -> error "If term condition is not a boolean"
+
+{- The term to be split, t, is evaluated and checked to be a Pair term.
+ - Substitutions for y and z by a and b respectively are before the
+ - main term, inTerm, is evaluated
+-}
+eval (Split t a b inTerm) = do
+    r <- eval t
+    r' <- lookupStore r
+    case r' of
+        Just (Pair qt (Var y) (Var z)) -> do
+          case qt of
+           Linear -> delBindStore r
+           Unrestrict -> return ()
+          let t1 = substTerm a y inTerm
+          let t2 = substTerm b z t1
+          eval t2
+        _ -> error "A non-pair term cannot be split"
+
+{- All linear terms i.e. lambdas, pairs, booleans and integers are consumed
+ - i.e. deallocated from the store at the top level after the entire term t
+ - has been evaluated. Unrestricted variables remain as they are in the store
+-}
+runEval :: Term -> (Term, Store)
+runEval t =
+  let (sym, (store, _)) = runState (eval t) ([], 0) in
+  case lookup sym store of
+       Just v@(Lam Linear _ _ _) -> (v, filter ((/= sym) . fst) store)
+       Just v@(Pair Linear _ _) -> (v, filter ((/= sym) . fst) store)
+       Just v@(LInt Linear _) ->  (v, filter ((/= sym) . fst) store)
+       Just v@(LBool Linear _) ->  (v, filter ((/= sym) . fst) store)
+       Just v -> (v, store)
+       Nothing -> error "Result not found in store"
+
+runExample :: String -> Term -> IO ()
+runExample name t = do
+  putStr $ name ++ ": "
+  case checkExpr t of
+    Left err -> putStrLn $ "Type error: " ++ show err
+    Right ty -> do
+      let result = runEval t
+      putStrLn $ show result ++ "  :  " ++ show ty
+
+main :: IO ()
+main = do
+  putStrLn "=== Printing the output store value ===\n"
+
+  putStrLn "\n=== Test 0 ===\n"
+  runExample "Test: A Pair with linear values" $
+    Pair Linear (LInt Linear 1) (LInt Linear 2)
+
+  putStrLn "\n=== Test 1 ===\n"
+  runExample "Test: Duplicating linear variable" $
+    Split (Pair Linear (LInt Linear 1) (LInt Linear 2))
+          "x" "y"
+          (Pair Linear (Var "x") (Var "x"))
+
+  putStrLn "\n=== Test 2 ===\n"
+  runExample "Test: Unrestricted bool should be present in output store" $
+    TIf (LBool Unrestrict True) (LInt Linear 1) (LInt Linear 2)
+
+  putStrLn "\n=== Test 3 ===\n"
+  runExample "App should deallocate linear lambda -> lambda \
+                    \ should not be in output context" $
+    App (Lam Linear "x" (QualType Linear TBool) (Var "x")) (LBool Linear True)
+
+  putStrLn "\n=== Test 4 ===\n"
+  {- This test is interesting because the linear ints in the initial Pair
+   - are deallocated from the store. When the Split and Pair in the first line
+   - are evaluated, variables a and b are freshly allocated
+   - in the store and then substituted in the Pair term at the end.
+   - The resulting linear Pair at the end has pointers to two distinct linear
+   - variables which is acceptable. If the variabled were to be duplicated,
+   - then an error would result as the same store location would be used twice.
+   -}
+  runExample "Test: Splitting and then pairing linear variables " $
+    Split (Pair Linear (LInt Linear 1) (LInt Linear 2))
+          "a" "b"
+          (Pair Linear (Var "b") (Var "a"))
+
+
+  putStrLn "\n=== Test 5 ===\n"
+  {- All linear terms are consumed except for the linear True and linear False
+   - values which are finally substituted for the terms of
+   - the Pair returned at the end
+  -}
+  runExample "Test: Split, pair, split and then pair linear variables " $
+    Split (Split (Pair Linear (LBool Linear True) (LBool Linear False))
+          "a" "b"
+           (Pair Linear (Var "b") (Var "a")))
+           "e" "f"
+           (Pair Linear -- the lambdas should not show up in the output store
+           (App (Lam Linear "x" (QualType Linear TBool) (Var "x"))
+               (Var "f"))
+            (App (Lam Linear "x" (QualType Linear TBool) (Var "x"))
+                        (Var "e")))
