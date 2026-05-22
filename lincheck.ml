@@ -166,4 +166,7 @@ typecheck")
   | LInt (q, _) -> Ok ((QualType (q, TInt), ct))
 
 
-let check_expr x = check [] x
+let check_expr =
+    let x =  TIf ((LBool (Unrestricted, true)),
+                (LInt (Linear, 1)), (LInt (Linear, 2))) in
+    check [] x
