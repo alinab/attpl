@@ -55,7 +55,7 @@ diffContext :: Context -> String -> QualType -> Check Context
 diffContext context v qt = do
     case qt of
      (QualType Linear _) ->
-        case (lookup v context) of
+        case lookup v context of
             Just _ -> throwError $ Err ("Linear Var: " ++  v ++ " unused")
             Nothing -> return context
      (QualType Unrestrict _) -> return (delete v context)
@@ -80,7 +80,7 @@ containCheck lq qt =
 -}
 check :: Context -> Term -> Check (QualType, Context)
 check context (Var x) =
-  case (lookup x context) of
+  case lookup x context of
     Just qt@(QualType Unrestrict  _) -> return (qt, context)
     Just qt@(QualType Linear _) -> return (qt, delete x context)
     Nothing -> throwError $ Err "var not in context"
@@ -102,7 +102,7 @@ check context (TIf t1 t2 t3) = do
          unless (context'' == context''')
                    $ throwError $ Err "Branch contexts differ"
          return (t2', context'')
-      _  -> throwError $ Err "Condition in If term does not typecheck to a boolean"
+      _otherFailure -> throwError $ Err "Condition in If term does not typecheck to a boolean"
 
 check context (App t1 t2) = do
     (resultTy, context') <- check context t1
@@ -111,7 +111,7 @@ check context (App t1 t2) = do
         (resultTy2, context'') <- check context' t2
         unless (resultTy2 == qt1) $ throwError $ Err "Type mismatch in App"
         return (qt2, context'')
-     _            -> throwError $ Err "Trying to apply non-function"
+     _otherFailure -> throwError $ Err "Trying to apply non-function"
 
 check context (Pair qt t1 t2) = do
     (pairTy1, context') <- check context t1
@@ -132,14 +132,14 @@ check context (Split splitTerm x y inTerm) = do
         contextDiff1 <- diffContext context'''' x qt1
         contextDiff2 <- diffContext contextDiff1 y qt2
         return (typeRes, contextDiff2)
-     _ -> throwError $ Err "Cannot split a non-pair"
+     _anyOtherFailure -> throwError $ Err "Cannot split a non-pair"
 
 
 check context (LBool q _) = return (QualType q TBool, context)
 check context (LInt q _) = return (QualType q TInt, context)
 
 checkExpr :: Term -> Either TypeError (QualType, Context)
-checkExpr x = check [] x
+checkExpr = check []
 
 
 {---------------------------------------------------------------}
@@ -212,7 +212,7 @@ eval (App t1 t2) = do
            Linear -> delBindStore x1
            Unrestrict -> return ()
           eval (substTerm y x2 l)
-        _  -> error "App term incorrect-lambda not applied"
+        _otherFailure  -> error "App term incorrect-lambda not applied"
 
 {- t1 is evaluated to a boolean pre-type before either t2 or t3 is
  - evaluated
@@ -228,7 +228,7 @@ eval (TIf t1 t2 t3) = do
           case b of
             True -> eval t2
             False -> eval t3
-        _  -> error "If term condition is not a boolean"
+        _otherFailure  -> error "If term condition is not a boolean"
 
 {- The term to be split, t, is evaluated and checked to be a Pair term.
  - Substitutions for y and z by a and b respectively are before the
@@ -245,7 +245,7 @@ eval (Split t a b inTerm) = do
           let t1 = substTerm a y inTerm
           let t2 = substTerm b z t1
           eval t2
-        _ -> error "A non-pair term cannot be split"
+        _otherFailure -> error "A non-pair term cannot be split"
 
 {- All linear terms i.e. lambdas, pairs, booleans and integers are consumed
  - i.e. deallocated from the store at the top level after the entire term t
