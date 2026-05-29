@@ -23,7 +23,7 @@ data Term = Var String
           | Split Term Sym Sym Term
           | InL LinQual PreType Term
           | InR LinQual PreType Term
-          | TCase Term Term Term
+          | TCase Term Sym Term Sym Term
           deriving (Eq, Show, Ord)
 
 data PreType = TBool
@@ -141,6 +141,49 @@ check context (Split splitTerm x y inTerm) = do
 
 check context (LBool q _) = return (QualType q TBool, context)
 check context (LInt q _) = return (QualType q TInt, context)
+
+check context (InL qt pt inlTerm) = do
+    (inlType, context') <- check context inlTerm
+    case pt of
+     TSum sumType1 sumType2 -> do
+      unless (inlType == sumType1) $ throwError $
+          Err "The left injection of the sum term does not match the assigned type"
+      unless (containCheck qt sumType1) $ throwError $
+          Err "Containment check for the left type of the sum type fails"
+      unless (containCheck qt sumType2) $ throwError $
+          Err "Containment check for the right type of the sum type fails"
+      return (QualType qt (TSum sumType1 sumType2), context')
+     _anyOtherType -> throwError $ Err "InL annotation is not a sum type"
+
+check context (InR qt pt inrTerm) = do
+    (inrType, context') <- check context inrTerm
+    case pt of
+     TSum sumType1 sumType2 -> do
+         unless (inrType == sumType2) $ throwError $
+            Err "The right injection of the sum term does not match the assigned type"
+         unless (containCheck qt sumType1) $ throwError $
+            Err "Containment check for the left type of the sum type fails"
+         unless (containCheck qt sumType2) $ throwError $
+            Err "Containment check for the right type of the sum type fails"
+         return (QualType qt (TSum sumType1 sumType2), context')
+     _anyOtherType -> throwError $ Err "InR annotation is not a sum type"
+
+check context (TCase caseTerm symL inlTerm symR inrTerm) = do
+    (caseTermTy, context') <- check context caseTerm
+    case caseTermTy of
+     QualType qt (TSum sumType1 sumType2) -> do
+       let context' = extend context' (symL, sumType1)
+       let context'' = extend context' (symR, sumType2)
+       (inlType, contextL) <- check context' inlTerm
+       (inrType, contextR) <- check context'' inrTerm
+       contextDiffL <- diffContext contextL symL sumType1
+       contextDiffR <- diffContext contextR symR sumType2
+       unless (inlType == inrType) $ throwError $
+        Err "The inferred types for the two case branches do not match"
+       unless (contextDiffL == contextDiffR) $ throwError $
+        Err "The type contexts for the two case branches differ"
+       return (inlType, context')
+     _anyOtherType -> throwError $ Err "Type for the case term does not evaluate to a sum type"
 
 checkExpr :: Term -> Either TypeError (QualType, Context)
 checkExpr = check []
