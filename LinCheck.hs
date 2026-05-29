@@ -1,6 +1,7 @@
 import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad (unless, when)
+import Data.List (all)
 
 data TypeError = Err String deriving Show
 
@@ -189,6 +190,65 @@ check context (TCase caseTerm symL inlTerm symR inrTerm) = do
         Err "The type contexts for the two case branches differ"
        return (inlType, context')
      _anyOtherType -> throwError $ Err "Type for the case term does not evaluate to a sum type"
+
+check context (TRoll pt rollTerm) =
+    case pt of
+     (TRec symRec innerTy@(QualType qt ptRec)) -> do
+      (termTy, context') <- check context rollTerm
+      -- qt also is the qualifier for the term replacing the inner type
+      let recTypeUpdated = subsType symRec (QualType qt pt) innerTy
+      unless (termTy == recTypeUpdated) $ throwError
+        $ Err "Roll term type does not match unrolled type"
+      return (QualType qt pt, context')
+     _anyOtherType -> throwError $ Err "Roll term is not annotated with recursive type"
+
+check context (TUnRoll unrollTerm) = do
+    (ptRec, context') <- check context unrollTerm
+    case ptRec of
+     QualType _ pt@(TRec symRec (QualType qt ptRec)) -> do
+      let recTypeUpdated = subsType symRec (QualType qt pt) (QualType qt ptRec)
+      return (recTypeUpdated, context')
+     _anyOtherType -> throwError $ Err "Unroll term is not annotated with recursive type"
+
+check context (TFunRec symF symX pt1 qt2 recTerm) = do
+    unless (all (\(_ , QualType q _) -> q == Unrestrict) context) $ throwError
+        $ Err "Context is not free of linear types (for recursive functions)"
+    let context' = extend context (symX, QualType Unrestrict pt1)
+    -- The arrow/function type is from an unrestricted type to an unrestricted type
+    let fTy = QualType Unrestrict (TArr (QualType Unrestrict pt1)
+                            (QualType Unrestrict qt2))
+    let context'' = extend context' (symF, fTy)
+    (bodyTy, context''') <- check context'' recTerm
+    case bodyTy of
+      QualType Unrestrict utArr@(TArr ut1@(QualType Unrestrict _) qt') -> do
+          unless (ut1 == QualType Unrestrict pt1) $ throwError $
+            Err "The recursive function input type does not match the type annotation"
+          unless (qt' == QualType Unrestrict qt2) $ throwError $
+            Err "The recursive result type does not match the function output annotation type"
+          contextDiffSymX <- diffContext context''' symX (QualType Unrestrict pt1)
+          contextDiffSymR <- diffContext contextDiffSymX symF fTy
+          return (QualType Unrestrict (TArr ut1 qt'), contextDiffSymR)
+      _anyOtherType -> throwError $
+            Err "The recursive result type does not match the function output type"
+
+{- Type substituion -}
+subsType sym replaceType qRecType =
+    case qRecType of
+      QualType qt (TVar sym') -> if sym' == sym then replaceType else
+                                 QualType qt (TVar sym')
+      QualType qt (TArr qtFuncP qtArgP) ->
+        QualType qt (TArr (subsType sym replaceType qtFuncP) (subsType sym replaceType qtArgP))
+      QualType qt (TPair qtPairFirst qtPairSecond) ->
+              QualType qt (TPair (subsType sym replaceType qtPairFirst)
+                        (subsType sym replaceType qtPairSecond))
+      QualType qt (TSum qtSumLeft qtSumRight) ->
+           QualType qt (TSum (subsType sym replaceType qtSumLeft)
+                         (subsType sym replaceType qtSumRight))
+      QualType qt (TRec sym' recType)
+           | sym' == sym -> QualType qt (TRec sym recType)
+           | otherwise -> QualType qt (TRec sym' (subsType sym replaceType recType))
+      QualType qt TBool ->  QualType qt TBool
+      QualType qt TInt ->  QualType qt TInt
 
 checkExpr :: Term -> Either TypeError (QualType, Context)
 checkExpr = check []
