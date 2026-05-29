@@ -21,12 +21,16 @@ data Term = Var String
           | LInt LinQual Int
           | LBool LinQual Bool
           | Split Term Sym Sym Term
+          | InL LinQual PreType Term
+          | InR LinQual PreType Term
+          | TCase Term Term Term
           deriving (Eq, Show, Ord)
 
 data PreType = TBool
              | TInt
              | TArr QualType QualType
              | TPair QualType QualType
+             | TSum QualType QualType
              deriving (Show, Eq, Ord)
 
 {- Types with qualifiers; these wrap pre-types -}
