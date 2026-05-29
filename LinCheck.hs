@@ -24,6 +24,9 @@ data Term = Var String
           | InL LinQual PreType Term
           | InR LinQual PreType Term
           | TCase Term Sym Term Sym Term
+          | TRoll PreType Term
+          | TUnRoll Term
+          | TFunRec Sym Sym PreType PreType Term
           deriving (Eq, Show, Ord)
 
 data PreType = TBool
@@ -31,6 +34,8 @@ data PreType = TBool
              | TArr QualType QualType
              | TPair QualType QualType
              | TSum QualType QualType
+             | TVar Sym
+             | TRec Sym QualType
              deriving (Show, Eq, Ord)
 
 {- Types with qualifiers; these wrap pre-types -}
