@@ -89,9 +89,9 @@ check context (Var x) =
     Just qt@(QualType Linear _) -> return (qt, delete x context)
     Nothing -> throwError $ Err "var not in context"
 
-check context (Lam q x qt body) = do
-    (bodyTy', context') <- check (extend context (x, qt)) body
-    context'' <- diffContext context' x qt
+check context (Lam q symLam qt body) = do
+    (bodyTy', context') <- check (extend context (symLam, qt)) body
+    context'' <- diffContext context' symLam qt
     when (q == Unrestrict) $ unless (context == context'') $
             throwError $ Err "Variables not captured in context"
     return (QualType q (TArr qt bodyTy'), context'')
@@ -126,15 +126,15 @@ check context (Pair qt t1 t2) = do
         throwError $ Err "Containment check for second term of a Pair fails"
     return (QualType qt (TPair pairTy1 pairTy2), context'')
 
-check context (Split splitTerm x y inTerm) = do
+check context (Split splitTerm symX symY inTerm) = do
     (splitTy, context') <- check context splitTerm
     case splitTy of
      QualType _ (TPair qt1 qt2) -> do
-        let context'' = extend context' (x, qt1)
-        let context''' = extend context'' (y, qt2)
+        let context'' = extend context' (symX, qt1)
+        let context''' = extend context'' (symY, qt2)
         (typeRes, context'''') <- check context''' inTerm
-        contextDiff1 <- diffContext context'''' x qt1
-        contextDiff2 <- diffContext contextDiff1 y qt2
+        contextDiff1 <- diffContext context'''' symX qt1
+        contextDiff2 <- diffContext contextDiff1 symY qt2
         return (typeRes, contextDiff2)
      _anyOtherFailure -> throwError $ Err "Cannot split a non-pair"
 
