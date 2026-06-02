@@ -48,6 +48,13 @@ let containment_check lq qt =
     | (Unrestricted, QualType (Unrestricted, _)) -> true
     | (Unrestricted,  QualType (Linear, _)) -> false
 
+(* declarative bind from the Result module *)
+let ( let* ) = Result.bind
+
+(* The equivalent of Haskell's unless *)
+let unless cond msg = if cond then Ok () else Error (Err msg)
+
+(* ------------------------------------------------------------------*)
 let rec check ct t =
   match t with
   | Var b -> begin
