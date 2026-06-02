@@ -66,20 +66,14 @@ let rec check ct t =
     end
 
   | Lam (q, x, qt, body) ->
-           let ct_extended = extend_context ct (x, qt) in
-           begin
-           match (check ct_extended body) with
-           | Ok (body_ty, ct')->
-                  begin match (context_diff ct' x qt) with
-                   | Ok ct'' ->
-                      if q = Unrestricted && ct' <> ct'' then
-                        Error (Err "Unrestricted variables incorrectly consumed")
-                      else
-                      Ok (QualType (q, TArr (qt, body_ty)), ct'')
-                   | _ -> Error (Err "Check for unused linear vars")
-                  end
-           | Error (Err _) -> Error (Err "Lambda variable not extended in context")
-           end
+         let ct_extended = extend_context ct (x, qt) in
+         let* (body_ty, ct1) = check ct_extended body in
+         let* ct2 = context_diff ct1 x qt in
+         Result.bind
+             (if q = Unrestricted then
+                 unless (ct1 <> ct2) "Unrestricted variables incorrectly consumed"
+             else Ok ())
+            (fun _ -> Ok (QualType (q, TArr (qt, body_ty)), ct2))
 
   | TIf (t1, t2, t3) ->
   begin
