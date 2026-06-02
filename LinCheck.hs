@@ -1,11 +1,13 @@
+module LinCheck where
+
 import Control.Monad.Except
 import Control.Monad.State
 import Control.Monad (unless, when)
 import Data.List (all)
 
-data TypeError = Err String deriving Show
+newtype TypeErrorString = Err String deriving Show
 
-type Check = Either TypeError
+type Check = Either TypeErrorString
 
 type Sym = String
 
@@ -250,7 +252,7 @@ subsType sym replaceType qRecType =
       QualType qt TBool ->  QualType qt TBool
       QualType qt TInt ->  QualType qt TInt
 
-checkExpr :: Term -> Either TypeError (QualType, Context)
+checkExpr :: Term -> Either TypeErrorString (QualType, Context)
 checkExpr = check []
 
 
