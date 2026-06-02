@@ -48,7 +48,12 @@ let context_diff ct v qt = match qt with
             | Some _ -> Error (Err ("Linear Var: " ^ v ^ " unused"))
             | None -> Ok ct
           end
-  | QualType (Unrestricted,  _) -> Ok (List.remove_assoc v ct)
+  | QualType (Unrestricted,  _) ->
+          begin
+          match List.assoc_opt v ct with
+          | None   -> Error (Err ("Unrestricted var '" ^ v ^ "' not found"))
+          | Some _ ->  Ok (List.remove_assoc v ct)
+          end
 
 let containment_check lq qt =
   match (lq, qt) with
