@@ -66,6 +66,11 @@ let unless cond msg = if cond then Ok () else Error (Err msg)
 (* ------------------------------------------------------------------*)
 let rec check ct t =
   match t with
+
+  | LBool (q, _) -> Ok ((QualType (q, TBool), ct))
+
+  | LInt (q, _) -> Ok ((QualType (q, TInt), ct))
+
   | Var b -> begin
                match (List.assoc_opt b ct) with
                | Some (QualType (Unrestricted, _) as qt) -> Ok (qt, ct)
@@ -85,96 +90,153 @@ let rec check ct t =
             (fun _ -> Ok (QualType (q, TArr (qt, body_ty)), ct2))
 
   | TIf (t1, t2, t3) ->
-  begin
-   match (check ct t1) with
-    | Ok (bool_type, context') ->
-       begin
+        let* (bool_type, context') =  check ct t1 in
+         begin
         match bool_type with
         | QualType (_, TBool)  ->
-         begin
-          match (check context' t2, check context' t3) with
-          | Ok (t1', context''), Ok (t2', context''') ->
-            if t1' <> t2' then Error (Err "Branch types differ")
-            else if context'' <> context'''
-                 then Error (Err "Branch contexts differ")
-                 else Ok (t2', context'')
-          | _ -> Error (Err "branch terms in If term do not typecheck")
+         let* (t2', context'') =  check context' t2 in
+         let* (t3', context''') = check context' t3 in
+         Result.bind
+           (Result.get_ok (unless (context'' = context''')
+           "If branch contexts differ");
+            Result.get_ok (unless (t2' = t3') "If branch types differ");
+            Ok ())
+           (fun _ -> Ok (t2', context''))
+        | _ -> Error (Err "Term in If guard does not evaluate to a boolean")
          end
-         | _ -> Error (Err "Condition in If term does not typecheck to a boolean")
-       end
-    | Error (Err _)  -> Error (Err "Condition in If term does not typecheck")
-  end
 
 
-  |  Pair (qt, t1, t2) ->
-   begin
-    match (check ct t1) with
-     | Ok (pair_ty1, ct') ->
-      begin
-       match (check ct' t2) with
-        | Ok (pair_ty2, ct'')  ->
-          if not (containment_check qt pair_ty2) then
-            Error (Err "Containment check for first term of a Pair fails")
-          else if (containment_check qt pair_ty2) then
-            Error (Err "Containment check for second term of a Pair fails")
-          else
-            Ok (QualType (qt, TPair (pair_ty1, pair_ty2)), ct'')
-        | Error (Err _) -> Error (Err "The first term in a Pair does not typecheck")
-        end
-    | Error (Err _) -> Error (Err "Check for error in boolean term of If term")
-   end
+  | Pair (qt, t1, t2) ->
+       let* (pair_ty1, ct') = check ct t1 in
+       let* (pair_ty2, ct'') = check ct' t2 in
+       Result.bind
+       (Result.get_ok (unless (containment_check qt pair_ty2)
+       "Containment check for first term of a Pair fails");
+        Result.get_ok (unless (containment_check qt pair_ty2)
+        "Containment check for second term of a Pair fails");
+        Ok ())
+        (fun _ -> Ok (QualType (qt, TPair (pair_ty1, pair_ty2)), ct''))
+
 
   | Split (split_term, x, y, in_term) ->
-    begin match (check ct split_term) with
-    | Ok (split_ty, ct') ->
+    let* (split_ty, ct') = check ct split_term in
      begin match split_ty  with
       | QualType (_, (TPair (qt1, qt2)))->
         let ct'' = extend_context ct' (x, qt1) in
         let ct''' = extend_context ct'' (y, qt2) in
-         begin match (check ct''' in_term) with
-           | Ok (type_result, ct'''') ->
-             begin match (context_diff ct'''' x qt1) with
-             | Ok context_diff1 ->
-                 begin
-                   match (context_diff context_diff1 y qt2) with
-                   | Ok context_diff2 -> Ok (type_result, context_diff2)
-                   | _ -> Error (Err "Context-diff fail: check linear var use")
-                 end
-             | _ -> Error (Err "Context-diff fail: check linear var use")
-             end
-           | _ -> Error (Err "Pair term did not typecheck")
-         end
-      | _  -> Error (Err "Pair term did not evaluate to a a pair type")
+        let* (type_result, ct'''') = check ct''' in_term in
+        let* context_diff1 = context_diff ct'''' x qt1 in
+        let* context_diff2 = context_diff ct'''' y qt2 in
+        Result.bind (unless (context_diff1 = context_diff2)
+                      "types added to contexts after splitting are not removed")
+        (fun _ -> Ok (type_result, context_diff2))
+     | _ -> Error (Err "Cannot split a non-pair")
      end
-    | Error (Err _) -> Error (Err "Cannot split a non-pair")
-    end
 
   | App (t1, t2) ->
-    begin
-     match (check ct t1) with
-     | Ok (result_ty, ct') ->
+       let* (result_ty, ct')  = check ct t1 in
        begin match result_ty with
         | QualType (_ , (TArr (qt1, qt2))) ->
-          begin match (check ct' t2) with
-           | Ok (result_ty2, ct'') ->
-             if (result_ty2 <> qt1) then
-                 Error (Err "Type mismatch in App")
-             else Ok (qt2, ct'')
-           | Error (Err _) -> Error (Err "App: Term in argument postion does not
-typecheck")
-          end
-        |  _ -> Error (Err "App: Term in function position does not typecheck to an
-        arrow type")
-       end
-    | Error (Err _) -> Error (Err "Trying to apply non-function")
+          let* (result_ty2, ct'') = check ct' t2 in
+          Result.bind (unless (result_ty2 = qt1) "Type mismatch in App")
+            (fun _ -> Ok (qt2, ct''))
+        | _ -> Error (Err "Trying to apply non-function")
+        end
+
+
+
+  | InL (qt, pt, inl_term) ->
+    let* (inl_type, ctx') = check ct inl_term in
+    begin match pt with
+     | TSum (sum_type1, sum_type2) ->
+       let* () = unless (inl_type = sum_type1)
+                 "Left injection does not match the assigned left type" in
+       let* () = unless (containment_check qt sum_type1)
+                 "Containment check for left type of sum fails" in
+       let* () = unless (containment_check qt sum_type2)
+                   "Containment check for right type of sum fails" in
+       Ok (QualType (qt, TSum (sum_type1, sum_type2)), ctx')
+     | _ -> Error (Err "InL annotation is not a sum type")
+    end
+
+  | InR (qt, pt, inr_term) ->
+    let* (inr_type, ctx') = check ct inr_term in
+    begin match pt with
+     | TSum (sum_type1, sum_type2) ->
+       let* () = unless (inr_type = sum_type2)
+                   "Right injection does not match the assigned right type" in
+       let* () = unless (containment_check qt sum_type1)
+                   "Containment check for left type of sum fails" in
+       let* () = unless (containment_check qt sum_type2)
+                   "Containment check for right type of sum fails" in
+       Ok (QualType (qt, TSum (sum_type1, sum_type2)), ctx')
+     | _ -> Error (Err "InR annotation is not a sum type")
+    end
+
+  | TCase (case_term, sym_l, inl_term, sym_r, inr_term) ->
+    let* (case_ty, ctx') = check ct case_term in
+    begin match case_ty with
+     | QualType (_, TSum (sum_type1, sum_type2)) ->
+       let ctx_l = extend_context ctx' (sym_l, sum_type1) in
+       let ctx_r = extend_context ctx' (sym_r, sum_type2) in
+       let* (inl_type, ctx_l') = check ctx_l inl_term in
+       let* (inr_type, ctx_r') = check ctx_r inr_term in
+       let* ctx_diff_l = context_diff ctx_l' sym_l sum_type1 in
+       let* ctx_diff_r = context_diff ctx_r' sym_r sum_type2 in
+       let* () = unless (inl_type = inr_type)
+                   "The inferred types for the two case branches do not match" in
+       let* () = unless (ctx_diff_l = ctx_diff_r)
+                   "The type contexts for the two case branches differ" in
+       Ok (inl_type, ctx_diff_l)
+     | _ -> Error (Err "Case scrutinee does not have a sum type")
     end
 
 
-  | LBool (q, _) ->
-         Ok ((QualType (q, TBool), ct))
+  | TRoll (pt, roll_term) ->
+    begin match pt with
+     | TRec (sym_rec, (QualType (qt, _) as inner_ty)) ->
+       let* (term_ty, ctx') = check ct roll_term in
+       let unrolled = subs_type sym_rec (QualType (qt, pt)) inner_ty in
+       let* () = unless (term_ty = unrolled)
+                   "Roll term type does not match unrolled type" in
+       Ok (QualType (qt, pt), ctx')
+     | _ -> Error (Err "Roll annotation is not a recursive type")
+    end
 
-  | LInt (q, _) -> Ok ((QualType (q, TInt), ct))
+  | TUnRoll unroll_term ->
+    let* (pt_rec, ctx') = check ct unroll_term in
+    begin match pt_rec with
+     | QualType (_, (TRec (sym_rec, QualType (qt, pt_rec_inner)) as pt)) ->
+       let unrolled = subs_type sym_rec
+                        (QualType (qt, pt))
+                        (QualType (qt, pt_rec_inner)) in
+       Ok (unrolled, ctx')
+     | _ -> Error (Err "Unroll term does not have a recursive type")
+    end
 
+
+  | TFunRec (sym_f, sym_x, pt1, qt2, rec_term) ->
+    let* () =
+      unless (List.for_all (fun (_, QualType (q, _)) -> q = Unrestricted) ct)
+        "Context contains linear variables (recursive functions must be unrestricted)" in
+    let arg_ty = QualType (Unrestricted, pt1) in
+    let ret_ty = QualType (Unrestricted, qt2) in
+    let f_ty   = QualType (Unrestricted, TArr (arg_ty, ret_ty)) in
+    (* Extend context with argument x and recursive name f *)
+    let ctx'  = extend_context ct  (sym_x, arg_ty) in
+    let ctx'' = extend_context ctx' (sym_f, f_ty)   in
+    let* (body_ty, ctx''') = check ctx'' rec_term in
+    begin match body_ty with
+     | QualType (Unrestricted, TArr (ut1, qt')) ->
+       let* () = unless (ut1 = arg_ty)
+                   "Recursive function input type does not match annotation" in
+       let* () = unless (qt' = ret_ty)
+                   "Recursive function return type does not match annotation" in
+       let* ctx_x = context_diff ctx'''  sym_x arg_ty in
+       let* ctx_f = context_diff ctx_x   sym_f f_ty   in
+       Ok (f_ty, ctx_f)
+     | _ -> Error (Err "Recursive function body does not have an unrestricted function type")
+    end
 
 let check_expr =
     let x =  TIf ((LBool (Unrestricted, true)),
