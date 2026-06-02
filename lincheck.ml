@@ -11,6 +11,9 @@ and pre_type = TBool
               | TInt
               | TArr of qual_type * qual_type
               | TPair of qual_type * qual_type
+              | TSum  of qual_type * qual_type
+              | TRec  of string * qual_type
+              | TVar of string
               [@@deriving show, eq, ord]
 
 type term = Var of string
@@ -21,6 +24,12 @@ type term = Var of string
            | LInt of linqual * int
            | LBool of linqual * bool
            | Split of term * sym * sym * term
+           | InL of linqual * pre_type * term
+           | InR of linqual * pre_type * term
+           | TCase of term * sym * term * sym * term
+           | TRoll of pre_type * term
+           | TUnRoll of term
+           | TFunRec of sym * sym * pre_type * pre_type * term
            [@@deriving show, eq, ord]
 
 type context = (sym * qual_type) list
