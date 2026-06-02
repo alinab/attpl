@@ -68,6 +68,33 @@ let ( let* ) = Result.bind
 (* The equivalent of Haskell's unless *)
 let unless cond msg = if cond then Ok () else Error (Err msg)
 
+let rec subs_type (sym : string) rep = function
+  | QualType (qt, TVar sym') ->
+      if sym' = sym then rep
+      else QualType (qt, TVar sym')
+
+  | QualType (qt, TArr (fn_ty, arg_ty)) ->
+      QualType (qt, TArr (subs_type sym rep fn_ty,
+                          subs_type sym rep arg_ty))
+
+  | QualType (qt, TPair (fst_ty, snd_ty)) ->
+      QualType (qt, TPair (subs_type sym rep fst_ty,
+                           subs_type sym rep snd_ty))
+
+  | QualType (qt, TSum (left_ty, right_ty)) ->
+      QualType (qt, TSum (subs_type sym rep left_ty,
+                          subs_type sym rep right_ty))
+
+  | QualType (qt, TRec (sym', rec_ty)) ->
+      if String.equal sym' sym then
+        QualType (qt, TRec (sym, rec_ty))   (* shadowed — stop *)
+      else
+        QualType (qt, TRec (sym', subs_type sym rep rec_ty))
+
+  | QualType (qt, TBool) -> QualType (qt, TBool)
+  | QualType (qt, TInt)  -> QualType (qt, TInt)
+
+
 (* ------------------------------------------------------------------*)
 let rec check ct t =
   match t with
